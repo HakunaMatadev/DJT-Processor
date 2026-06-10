@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+.env
+data/trump_tracker.duckdb
+data/trump_tracker.duckdb.wal
+data/*.parquet
+data/*.csv
+data/logs/
+!data/.gitkeep
+!data/logs/.gitkeep
