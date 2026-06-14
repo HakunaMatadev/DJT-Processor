@@ -73,6 +73,8 @@ CREATE TABLE IF NOT EXISTS polymarket_snapshots (
     total_volume    FLOAT,
     end_date        DATE,
     active          BOOLEAN,
+    slug            TEXT DEFAULT '',
+    polymarket_url  TEXT DEFAULT '',
     snapshotted_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -84,6 +86,41 @@ CREATE TABLE IF NOT EXISTS market_outcomes (
     resolved_yes    BOOLEAN,
     notes           TEXT
 );
+
+CREATE TABLE IF NOT EXISTS bet_log (
+    id              INTEGER PRIMARY KEY,
+    logged_at       TIMESTAMPTZ DEFAULT NOW(),
+    market_id       TEXT NOT NULL,
+    question        TEXT,
+    category        TEXT,
+    side            TEXT NOT NULL,     -- 'YES' or 'NO'
+    entry_price     FLOAT NOT NULL,    -- 0.0 to 1.0
+    stake_usd       FLOAT NOT NULL,
+    signal_spike    FLOAT,             -- spike_ratio at time of bet
+    signal_category TEXT,
+    resolved_yes    BOOLEAN,           -- filled in when market resolves
+    pnl_usd         FLOAT,             -- filled in when resolved
+    notes           TEXT
+);
+CREATE SEQUENCE IF NOT EXISTS bet_log_seq;
+
+CREATE TABLE IF NOT EXISTS predictions (
+    id              INTEGER PRIMARY KEY,
+    pred_type       TEXT NOT NULL,     -- 'keyword_odds' | 'best_bet'
+    subject         TEXT NOT NULL,     -- keyword term, or Polymarket market_id
+    question        TEXT,              -- human-readable question text
+    category        TEXT,
+    predicted_prob  FLOAT NOT NULL,    -- our model's probability estimate (0-1)
+    market_price    FLOAT,             -- market yes_price at time of prediction, if any
+    polymarket_url  TEXT,
+    logged_at       TIMESTAMPTZ DEFAULT NOW(),
+    window_start    TIMESTAMPTZ,       -- start of the period being predicted (keyword_odds)
+    check_after     TIMESTAMPTZ NOT NULL,  -- earliest time the outcome can be checked
+    resolved_at     TIMESTAMPTZ,
+    actual_outcome  BOOLEAN,           -- TRUE/FALSE once resolved, NULL = pending
+    notes           TEXT
+);
+CREATE SEQUENCE IF NOT EXISTS predictions_seq;
 """
 
 # ── Keyword groups ──────────────────────────────────────────────────────────
@@ -391,6 +428,8 @@ def main():
 
     con = duckdb.connect(str(args.db))
     con.execute(SCHEMA_SQL)
+    con.execute("ALTER TABLE polymarket_snapshots ADD COLUMN IF NOT EXISTS slug TEXT DEFAULT ''")
+    con.execute("ALTER TABLE polymarket_snapshots ADD COLUMN IF NOT EXISTS polymarket_url TEXT DEFAULT ''")
 
     frames = []
 

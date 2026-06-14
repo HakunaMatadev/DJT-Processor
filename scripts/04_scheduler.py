@@ -15,6 +15,7 @@ Usage:
     python 04_scheduler.py --step polymarket
     python 04_scheduler.py --step analyze
     python 04_scheduler.py --step outcomes
+    python 04_scheduler.py --step predictions
 """
 
 import argparse
@@ -43,12 +44,14 @@ INGEST_INTERVAL_SECS      = 30 * 60   # 30 min
 POLYMARKET_INTERVAL_SECS  = 60 * 60   # 60 min
 ANALYZE_INTERVAL_SECS     = 6 * 3600  # 6 hours
 OUTCOMES_INTERVAL_SECS    = 24 * 3600  # 24 hours
+PREDICTIONS_INTERVAL_SECS = 24 * 3600  # 24 hours
 
 last_run: dict[str, float] = {
     "ingest":      0,
     "polymarket":  0,
     "analyze":     0,
     "outcomes":    0,
+    "predictions": 0,
 }
 
 
@@ -93,15 +96,25 @@ def tick():
         if ok:
             last_run["outcomes"] = now
 
+    if should_run("predictions", PREDICTIONS_INTERVAL_SECS):
+        ok1 = run_step("Best Bets prediction snapshot", "08_score_predictions.py", ["log-bestbets"])
+        ok2 = run_step("Resolve predictions", "08_score_predictions.py", ["resolve"])
+        if ok1 and ok2:
+            last_run["predictions"] = now
+
 
 def main():
     parser = argparse.ArgumentParser(description="Trump tracker scheduler")
     parser.add_argument("--once", action="store_true", help="Run all steps once and exit")
-    parser.add_argument("--step", choices=["ingest", "polymarket", "analyze", "outcomes"],
+    parser.add_argument("--step", choices=["ingest", "polymarket", "analyze", "outcomes", "predictions"],
                         help="Run a single step and exit")
     args = parser.parse_args()
 
     if args.step:
+        if args.step == "predictions":
+            run_step("Best Bets prediction snapshot", "08_score_predictions.py", ["log-bestbets"])
+            run_step("Resolve predictions", "08_score_predictions.py", ["resolve"])
+            return
         script_map = {
             "ingest":     "01_ingest.py",
             "polymarket": "02_polymarket.py",
@@ -117,6 +130,8 @@ def main():
         run_step("Polymarket odds", "02_polymarket.py")
         run_step("Analysis", "03_analyze.py")
         run_step("Outcome backfill", "05_backfill_outcomes.py")
+        run_step("Best Bets prediction snapshot", "08_score_predictions.py", ["log-bestbets"])
+        run_step("Resolve predictions", "08_score_predictions.py", ["resolve"])
         log.info("Done.")
         return
 
@@ -124,6 +139,8 @@ def main():
     log.info(f"  Ingest:     every {INGEST_INTERVAL_SECS//60} min")
     log.info(f"  Polymarket: every {POLYMARKET_INTERVAL_SECS//60} min")
     log.info(f"  Analysis:   every {ANALYZE_INTERVAL_SECS//3600} hours")
+    log.info(f"  Outcomes:   every {OUTCOMES_INTERVAL_SECS//3600} hours")
+    log.info(f"  Predictions: every {PREDICTIONS_INTERVAL_SECS//3600} hours")
 
     while True:
         try:

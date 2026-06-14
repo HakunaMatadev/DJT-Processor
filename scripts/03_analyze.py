@@ -142,6 +142,8 @@ def compute_odds_movements(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
                 category,
                 yes_price AS current_yes_price,
                 volume_24h AS current_volume_24h,
+                end_date,
+                polymarket_url,
                 snapshotted_at AS latest_snapshot
             FROM polymarket_snapshots
             QUALIFY ROW_NUMBER() OVER (
@@ -180,6 +182,8 @@ def compute_odds_movements(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
             l.current_yes_price - p7.yes_price_7d_ago AS change_7d,
             l.current_yes_price - p30.yes_price_30d_ago AS change_30d,
             l.current_volume_24h,
+            l.end_date,
+            l.polymarket_url,
             l.latest_snapshot
         FROM latest l
         LEFT JOIN price_7d p7 ON l.id = p7.id

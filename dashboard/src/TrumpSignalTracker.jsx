@@ -5,7 +5,7 @@ import {
 } from "recharts";
 
 const GAMMA_API = "https://gamma-api.polymarket.com";
-const API_BASE = process.env.REACT_APP_API_URL || null;
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:5001";
 
 async function fetchFromAPI(endpoint, fallback) {
   if (!API_BASE) return fallback;
@@ -348,6 +348,491 @@ function BestBetRow({ opp }) {
   );
 }
 
+const SUGGESTED_TERMS = ["tariff", "China", "Iran", "fired", "pardon", "NATO", "election", "UFC", "cat", "windmill"];
+
+const PROBABILITY_WINDOWS = [1, 3, 7, 14, 30, 60, 90];
+
+const RATE_SOURCE_LABELS = {
+  "7d": "7-day",
+  "30d": "30-day",
+  "90d": "90-day",
+  all_time: "all-time",
+};
+
+function ProbabilityBar({ days, probability }) {
+  const pct = Math.min(Math.max(probability, 0), 1) * 100;
+  const color = probability >= 0.66 ? "#1D9E75" : probability >= 0.33 ? "#EF9F27" : "#E24B4A";
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+        <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
+          Within {days} day{days === 1 ? "" : "s"}
+        </span>
+        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>
+          {pct.toFixed(1)}%
+        </span>
+      </div>
+      <div style={{ height: 5, background: "var(--color-background-secondary)", borderRadius: 3, overflow: "hidden" }}>
+        <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 3, transition: "width 0.4s" }} />
+      </div>
+    </div>
+  );
+}
+
+function KeywordMarketRow({ m }) {
+  const yesPct = m.yes_price != null ? Math.round(m.yes_price * 100) : null;
+  const ourPct = m.our_probability != null ? Math.round(m.our_probability * 100) : null;
+  const edge = m.edge;
+  const edgeColor = edge > 0 ? "#1D9E75" : edge < 0 ? "#E24B4A" : "var(--color-text-secondary)";
+
+  return (
+    <div style={{ padding: "10px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: "var(--color-text-primary)" }}>
+          {m.question}
+        </span>
+        {m.polymarket_url ? (
+          <a href={m.polymarket_url} target="_blank" rel="noreferrer"
+             style={{
+               fontSize: 12, fontWeight: 500, padding: "4px 10px", borderRadius: 6,
+               background: "var(--color-background-secondary)", color: "var(--color-text-primary)",
+               textDecoration: "none", flexShrink: 0, whiteSpace: "nowrap"
+             }}>
+            Bet →
+          </a>
+        ) : null}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14, fontSize: 12, color: "var(--color-text-secondary)", marginTop: 4 }}>
+        <span>Market YES: {yesPct !== null ? `${yesPct}%` : "—"}</span>
+        <span>Our estimate: {ourPct !== null ? `${ourPct}%` : "—"}</span>
+        {edge != null && (
+          <span style={{ color: edgeColor, fontWeight: 500 }}>
+            {edge > 0 ? "+" : ""}{(edge * 100).toFixed(1)}pp edge
+          </span>
+        )}
+        {m.days_to_end != null && (
+          <span>ends in {m.days_to_end}d ({(m.end_date || "").slice(0, 10)})</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function KeywordOddsPanel({ apiOnline }) {
+  const [inputValue, setInputValue] = useState("");
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [trackDays, setTrackDays] = useState(30);
+  const [tracking, setTracking] = useState(false);
+  const [trackMessage, setTrackMessage] = useState(null);
+
+  const search = useCallback(async (raw) => {
+    const q = raw.trim();
+    if (!q || !API_BASE) return;
+    setLoading(true);
+    setError(null);
+    setTrackMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/keyword?q=${encodeURIComponent(q)}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
+      setData(json);
+    } catch (e) {
+      setError(e.message || "Could not fetch keyword odds.");
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const track = useCallback(async () => {
+    if (!data || !API_BASE) return;
+    setTracking(true);
+    setTrackMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/keyword/track`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ term: data.term, days: trackDays }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
+      setTrackMessage(
+        `Tracking "${json.subject}" at ${(json.predicted_prob * 100).toFixed(1)}% — ` +
+        `check the Track Record tab after ${json.check_after.slice(0, 10)}.`
+      );
+    } catch (e) {
+      setTrackMessage(`Error: ${e.message}`);
+    } finally {
+      setTracking(false);
+    }
+  }, [data, trackDays]);
+
+  return (
+    <div>
+      <p style={{ fontSize: 13, color: "var(--color-text-secondary)", marginTop: 0, marginBottom: "1rem" }}>
+        Search any word or phrase to see how often Trump has posted it, and the modeled probability he
+        says it again soon — the "will Trump say X this week/month?" type of bet. Probabilities use a
+        Poisson model based on his recent posting rate, and are compared against any live matching
+        Polymarket markets.
+      </p>
+
+      {!apiOnline && (
+        <div style={{
+          padding: "0.75rem 1rem", borderRadius: "var(--border-radius-md)", marginBottom: "1rem",
+          background: "var(--color-background-warning)", border: "0.5px solid var(--color-border-warning)"
+        }}>
+          <p style={{ margin: 0, fontSize: 13, color: "var(--color-text-warning)" }}>
+            <i className="ti ti-alert-triangle" aria-hidden="true" /> Flask API not detected — keyword
+            odds need the full Python pipeline. Run <code>python scripts/07_api.py</code>.
+          </p>
+        </div>
+      )}
+
+      <form onSubmit={e => { e.preventDefault(); search(inputValue); }}
+            style={{ display: "flex", gap: 8, marginBottom: "0.75rem" }}>
+        <input
+          type="text"
+          value={inputValue}
+          onChange={e => setInputValue(e.target.value)}
+          placeholder='Search a word or phrase, e.g. "tariff" or "cat"'
+          style={{
+            flex: 1, fontSize: 14, padding: "8px 12px", borderRadius: "var(--border-radius-md)",
+            border: "0.5px solid var(--color-border-tertiary)", background: "var(--color-background-primary)",
+            color: "var(--color-text-primary)"
+          }}
+        />
+        <button type="submit" disabled={loading || !inputValue.trim() || !apiOnline}
+                style={{ fontSize: 13, padding: "8px 16px", whiteSpace: "nowrap" }}>
+          {loading ? "Searching…" : "Search"}
+        </button>
+      </form>
+
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: "1.25rem" }}>
+        <span style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>Try:</span>
+        {SUGGESTED_TERMS.map(t => (
+          <button key={t} onClick={() => { setInputValue(t); search(t); }} disabled={loading || !apiOnline}
+                  style={{
+                    fontSize: 12, padding: "3px 10px", borderRadius: 20,
+                    background: "var(--color-background-secondary)", color: "var(--color-text-secondary)",
+                    border: "0.5px solid var(--color-border-tertiary)"
+                  }}>
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {error && (
+        <div style={{
+          padding: "0.75rem 1rem", borderRadius: "var(--border-radius-md)", marginBottom: "1rem",
+          background: "var(--color-background-danger)", border: "0.5px solid var(--color-border-danger)"
+        }}>
+          <p style={{ margin: 0, fontSize: 13, color: "var(--color-text-danger)" }}>
+            <i className="ti ti-alert-triangle" aria-hidden="true" /> {error}
+          </p>
+        </div>
+      )}
+
+      {data && data.total_mentions === 0 && (
+        <p style={{ fontSize: 14, color: "var(--color-text-secondary)" }}>
+          No mentions of "{data.term}" found in the archive.
+        </p>
+      )}
+
+      {data && data.total_mentions > 0 && (
+        <>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: "1rem" }}>
+            {[
+              { label: "Total mentions", value: data.total_mentions.toLocaleString() },
+              { label: "Last mentioned", value: data.days_since_last != null ? `${data.days_since_last.toFixed(1)}d ago` : "never" },
+              { label: "Mentions (30d)", value: data.windows["30d"].mentions },
+              { label: "Mentions (90d)", value: data.windows["90d"].mentions },
+            ].map(s => (
+              <div key={s.label} style={{
+                background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)",
+                padding: "0.75rem 1rem", flex: "1 1 120px"
+              }}>
+                <div style={{ fontSize: 12, color: "var(--color-text-secondary)", marginBottom: 4 }}>{s.label}</div>
+                <div style={{ fontSize: 20, fontWeight: 500, color: "var(--color-text-primary)" }}>{s.value}</div>
+              </div>
+            ))}
+          </div>
+
+          <p style={{ fontSize: 12, color: "var(--color-text-tertiary)", marginTop: 0, marginBottom: "1.25rem" }}>
+            Modeled at {data.primary_rate.toFixed(3)} mentions/day, based on{" "}
+            {RATE_SOURCE_LABELS[data.primary_source] || data.primary_source} activity
+            {data.primary_source !== "30d" ? " (no recent 30-day mentions, so falling back to a longer window)" : ""}.
+          </p>
+
+          <div style={{ marginBottom: "1.5rem" }}>
+            <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 500, color: "var(--color-text-primary)" }}>
+              Probability "{data.term}" comes up again
+            </h4>
+            {PROBABILITY_WINDOWS.map(days => (
+              <ProbabilityBar key={days} days={days} probability={data.probabilities[String(days)]} />
+            ))}
+
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginTop: 10 }}>
+              <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
+                Track this prediction:
+              </span>
+              <select value={trackDays} onChange={e => setTrackDays(Number(e.target.value))}
+                      disabled={tracking || !apiOnline}
+                      style={{
+                        fontSize: 12, padding: "4px 8px", borderRadius: 6,
+                        border: "0.5px solid var(--color-border-tertiary)",
+                        background: "var(--color-background-primary)", color: "var(--color-text-primary)"
+                      }}>
+                {PROBABILITY_WINDOWS.map(d => (
+                  <option key={d} value={d}>within {d} day{d === 1 ? "" : "s"}</option>
+                ))}
+              </select>
+              <button onClick={track} disabled={tracking || !apiOnline}
+                      style={{ fontSize: 12, padding: "4px 12px" }}>
+                {tracking ? "Tracking…" : "Track"}
+              </button>
+            </div>
+            {trackMessage && (
+              <p style={{ fontSize: 12, color: "var(--color-text-secondary)", marginTop: 6, marginBottom: 0 }}>
+                {trackMessage}
+              </p>
+            )}
+          </div>
+
+          {data.weekly_series.length > 0 && (
+            <div style={{ marginBottom: "1.5rem" }}>
+              <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 500, color: "var(--color-text-primary)" }}>
+                Weekly mentions
+              </h4>
+              <div style={{ position: "relative", width: "100%", height: 180 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={data.weekly_series} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border-tertiary)" />
+                    <XAxis dataKey="week" tick={{ fontSize: 10, fill: "var(--color-text-secondary)" }}
+                           tickFormatter={v => v.slice(5)} />
+                    <YAxis tick={{ fontSize: 11, fill: "var(--color-text-secondary)" }} allowDecimals={false} />
+                    <Tooltip
+                      contentStyle={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 8, fontSize: 12 }}
+                      labelFormatter={l => `Week of ${l}`}
+                    />
+                    <Bar dataKey="mentions" fill="#378ADD" radius={[2, 2, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 500, color: "var(--color-text-primary)" }}>
+              Live "Will Trump say ..." markets
+            </h4>
+            {data.markets.length === 0 ? (
+              <p style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
+                No live Polymarket markets currently match "{data.term}".
+              </p>
+            ) : (
+              data.markets.map((m, i) => <KeywordMarketRow key={i} m={m} />)
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function PredictionRow({ p }) {
+  const predictedPct = Math.round(p.predicted_prob * 100);
+  const marketPct = p.market_price != null ? Math.round(p.market_price * 100) : null;
+  const status = p.actual_outcome === null ? "pending" : p.actual_outcome ? "YES" : "NO";
+  const statusColor = status === "pending" ? "#888780" : status === "YES" ? "#1D9E75" : "#E24B4A";
+  const typeLabel = p.pred_type === "keyword_odds" ? "Keyword Odds" : "Best Bet";
+  const label = p.question || p.subject;
+  const dateLabel = status === "pending"
+    ? `check after ${(p.check_after || "").slice(0, 10)}`
+    : `resolved ${(p.resolved_at || p.check_after || "").slice(0, 10)}`;
+
+  return (
+    <div style={{ padding: "10px 0", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{
+          fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 10,
+          background: statusColor + "20", color: statusColor, flexShrink: 0
+        }}>
+          {status}
+        </span>
+        <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: "var(--color-text-primary)" }}>
+          {label}
+        </span>
+        {p.polymarket_url ? (
+          <a href={p.polymarket_url} target="_blank" rel="noreferrer"
+             style={{
+               fontSize: 12, fontWeight: 500, padding: "4px 10px", borderRadius: 6,
+               background: "var(--color-background-secondary)", color: "var(--color-text-primary)",
+               textDecoration: "none", flexShrink: 0, whiteSpace: "nowrap"
+             }}>
+            View →
+          </a>
+        ) : null}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14, fontSize: 12, color: "var(--color-text-secondary)", marginTop: 4 }}>
+        <span>{typeLabel}</span>
+        <span>Our estimate: {predictedPct}%</span>
+        {marketPct !== null && <span>Market: {marketPct}%</span>}
+        <span>logged {(p.logged_at || "").slice(0, 10)}</span>
+        <span>{dateLabel}</span>
+      </div>
+    </div>
+  );
+}
+
+function TrackRecordPanel({ apiOnline }) {
+  const [predictions, setPredictions] = useState([]);
+  const [calibration, setCalibration] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [filterType, setFilterType] = useState("");
+  const [pendingOnly, setPendingOnly] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!API_BASE) return;
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (filterType) params.set("type", filterType);
+      if (pendingOnly) params.set("pending", "true");
+      const calQuery = filterType ? `?type=${filterType}` : "";
+      const [predsRes, calRes] = await Promise.all([
+        fetch(`${API_BASE}/api/predictions?${params.toString()}`),
+        fetch(`${API_BASE}/api/predictions/calibration${calQuery}`),
+      ]);
+      setPredictions(await predsRes.json());
+      setCalibration(await calRes.json());
+    } catch {
+      setPredictions([]);
+      setCalibration(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [filterType, pendingOnly]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const pendingCount = predictions.filter(p => p.actual_outcome === null).length;
+  const resolvedCount = predictions.length - pendingCount;
+
+  const chartData = (calibration?.buckets || []).map(b => ({
+    range: b.range,
+    predicted: Math.round(b.avg_predicted * 1000) / 10,
+    actual: Math.round(b.actual_rate * 1000) / 10,
+    n: b.n,
+  }));
+
+  return (
+    <div>
+      <p style={{ fontSize: 13, color: "var(--color-text-secondary)", marginTop: 0, marginBottom: "1rem" }}>
+        Every Best Bet pick is automatically logged here with its modeled probability, and any Keyword Odds
+        query you "Track" is logged the same way. Once a prediction's "check after" date passes, the resolver
+        checks what actually happened — did the keyword get mentioned, did the market resolve YES? — and this
+        tab reports how well-calibrated the model has been: a Brier score, and "when we said ~70%, did it
+        happen ~70% of the time?" buckets.
+      </p>
+
+      {!apiOnline && (
+        <div style={{
+          padding: "0.75rem 1rem", borderRadius: "var(--border-radius-md)", marginBottom: "1rem",
+          background: "var(--color-background-warning)", border: "0.5px solid var(--color-border-warning)"
+        }}>
+          <p style={{ margin: 0, fontSize: 13, color: "var(--color-text-warning)" }}>
+            <i className="ti ti-alert-triangle" aria-hidden="true" /> Flask API not detected — the track record
+            needs the full Python pipeline. Run <code>python scripts/07_api.py</code>.
+          </p>
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, marginBottom: "1rem" }}>
+        <select value={filterType} onChange={e => setFilterType(e.target.value)}
+                disabled={!apiOnline}
+                style={{
+                  fontSize: 12, padding: "4px 8px", borderRadius: 6,
+                  border: "0.5px solid var(--color-border-tertiary)",
+                  background: "var(--color-background-primary)", color: "var(--color-text-primary)"
+                }}>
+          <option value="">All types</option>
+          <option value="keyword_odds">Keyword Odds</option>
+          <option value="best_bet">Best Bets</option>
+        </select>
+        <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--color-text-secondary)" }}>
+          <input type="checkbox" checked={pendingOnly} onChange={e => setPendingOnly(e.target.checked)} disabled={!apiOnline} />
+          Pending only
+        </label>
+        <button onClick={load} disabled={loading || !apiOnline} style={{ fontSize: 12, padding: "4px 12px" }}>
+          {loading ? "Loading…" : "Refresh"}
+        </button>
+      </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: "1.25rem" }}>
+        {[
+          { label: "Total logged", value: predictions.length },
+          { label: "Pending", value: pendingCount },
+          { label: "Resolved", value: resolvedCount },
+          { label: "Brier score", value: calibration?.brier_score != null ? calibration.brier_score.toFixed(4) : "—" },
+        ].map(s => (
+          <div key={s.label} style={{
+            background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)",
+            padding: "0.75rem 1rem", flex: "1 1 120px"
+          }}>
+            <div style={{ fontSize: 12, color: "var(--color-text-secondary)", marginBottom: 4 }}>{s.label}</div>
+            <div style={{ fontSize: 20, fontWeight: 500, color: "var(--color-text-primary)" }}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {chartData.length > 0 && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 500, color: "var(--color-text-primary)" }}>
+            Calibration: predicted vs. actual
+          </h4>
+          <p style={{ fontSize: 12, color: "var(--color-text-tertiary)", marginTop: 0, marginBottom: 8 }}>
+            Predictions are bucketed by their modeled probability. If the model is well-calibrated, the two
+            bars in each bucket should be close — e.g. predictions made at ~70% should resolve YES about 70%
+            of the time.
+          </p>
+          <div style={{ position: "relative", width: "100%", height: 220 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border-tertiary)" />
+                <XAxis dataKey="range" tick={{ fontSize: 11, fill: "var(--color-text-secondary)" }} />
+                <YAxis tick={{ fontSize: 11, fill: "var(--color-text-secondary)" }} unit="%" />
+                <Tooltip
+                  contentStyle={{ background: "var(--color-background-primary)", border: "0.5px solid var(--color-border-secondary)", borderRadius: 8, fontSize: 12 }}
+                  formatter={(value, name) => [`${value}%`, name === "predicted" ? "Predicted" : "Actual"]}
+                  labelFormatter={l => `Predicted ${l}`}
+                />
+                <Bar dataKey="predicted" name="Predicted" fill="#378ADD" radius={[2, 2, 0, 0]} />
+                <Bar dataKey="actual" name="Actual" fill="#1D9E75" radius={[2, 2, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      <div>
+        <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 500, color: "var(--color-text-primary)" }}>
+          Logged predictions
+        </h4>
+        {predictions.length === 0 ? (
+          <p style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
+            No predictions logged yet. Use the "Track" button on the Keyword Odds tab, or run{" "}
+            <code>python scripts/08_score_predictions.py log-bestbets</code>.
+          </p>
+        ) : (
+          predictions.map(p => <PredictionRow key={p.id} p={p} />)
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [tab, setTab] = useState("bestbets");
   const { apiOnline, opportunities, stats: liveStats, loadingOpps, refresh: refreshAPI } = useLiveAPI();
@@ -430,6 +915,8 @@ export default function App() {
     { id: "bestbets",  label: "Best Bets",      icon: "ti-target" },
     { id: "spikes",    label: "Spike Alerts",   icon: "ti-alert-triangle" },
     { id: "velocity",  label: "Keyword Velocity", icon: "ti-trending-up" },
+    { id: "keywordodds", label: "Keyword Odds",  icon: "ti-search" },
+    { id: "trackrecord", label: "Track Record",  icon: "ti-history" },
     { id: "polymarket",label: "Polymarket Odds",  icon: "ti-chart-bar" },
     { id: "heatmap",   label: "Posting Heatmap",  icon: "ti-clock" },
     { id: "agitation", label: "Agitation Index",  icon: "ti-flame" },
@@ -661,6 +1148,10 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {tab === "keywordodds" && <KeywordOddsPanel apiOnline={apiOnline} />}
+
+      {tab === "trackrecord" && <TrackRecordPanel apiOnline={apiOnline} />}
 
       {tab === "polymarket" && (
         <div>

@@ -24,7 +24,7 @@ NOISE_PATTERNS = [
     r"publicly insult",
     r"spread:",
     r"o/u \d",
-    r" win on \d{4}-\d{2}-\d{2}",
+    r"^will .{1,30} win on \d{4}-\d{2}-\d{2}\?$",
     r"win the 2028",
     r"presidential election",
     r"republican presidential",
@@ -71,9 +71,11 @@ def _matches_any(text: str, patterns: list[str]) -> bool:
     return any(re.search(p, text, re.I) for p in patterns)
 
 
-def is_actionable_market(question: str) -> bool:
+def is_actionable_market(question: str, debug: bool = False) -> bool:
     q = question.lower()
     if _matches_any(q, NOISE_PATTERNS):
+        if debug:
+            print(f"  [filtered] {question[:60]}")
         return False
     return _matches_any(q, ACTION_PATTERNS) or (
         "trump" in q and not _matches_any(q, NOISE_PATTERNS)
@@ -218,6 +220,7 @@ def score_markets(
                 yes_price AS current_yes_price,
                 volume_24h AS current_volume_24h,
                 end_date,
+                polymarket_url,
                 snapshotted_at AS latest_snapshot
             FROM polymarket_snapshots
             QUALIFY ROW_NUMBER() OVER (PARTITION BY id ORDER BY snapshotted_at DESC) = 1
@@ -319,6 +322,7 @@ def score_markets(
             "composite_score": round(composite, 3),
             "days_to_end": days_to_end,
             "reason": "; ".join(reasons) if reasons else "policy market, moderate signal",
+            "polymarket_url": str(m.get("polymarket_url") or ""),
         })
 
     if not rows:

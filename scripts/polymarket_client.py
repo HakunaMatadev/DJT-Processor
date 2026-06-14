@@ -4,6 +4,10 @@ Shared Polymarket Gamma API client: fetch, filter, parse, and store snapshots.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+
 import json
 import time
 from datetime import datetime, timezone
@@ -150,6 +154,9 @@ def parse_market(market: dict, *, snapshotted_at: datetime | None = None) -> dic
         except Exception:
             pass
 
+    slug = market.get("slug") or ""
+    polymarket_url = f"https://polymarket.com/event/{slug}" if slug else ""
+
     return {
         "id": mid,
         "question": question,
@@ -159,6 +166,8 @@ def parse_market(market: dict, *, snapshotted_at: datetime | None = None) -> dic
         "total_volume": float(market.get("volume") or market.get("usdcVolume") or 0),
         "end_date": end_date,
         "active": bool(market.get("active", True)),
+        "slug": slug,
+        "polymarket_url": polymarket_url,
         "snapshotted_at": snapshotted_at or datetime.now(timezone.utc),
     }
 
